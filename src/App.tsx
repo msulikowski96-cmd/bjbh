@@ -25,7 +25,8 @@ import {
   ArrowDown,
   Target,
   Calendar,
-  Sparkles
+  Sparkles,
+  Ruler
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import DemoTab from './components/DemoTab';
@@ -63,6 +64,15 @@ import {
   getBMICategory, 
   getBMICategoryColor 
 } from './utils';
+import {
+  UnitSystem,
+  kgToLbs,
+  lbsToKg,
+  cmToFtIn,
+  ftInToCm,
+  formatWeight,
+  formatHeight
+} from './units';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -80,6 +90,8 @@ export default function App() {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [historyFilter, setHistoryFilter] = useState('');
   const [historySort, setHistorySort] = useState<{ key: 'date' | 'weight' | 'bmi', order: 'asc' | 'desc' }>({ key: 'date', order: 'desc' });
+  const [unitSystem, setUnitSystem] = useState<UnitSystem>('metric');
+  const [showLanding, setShowLanding] = useState(true);
 
   const [profile, setProfile] = useState<UserProfile>({
     age: 30,
@@ -130,6 +142,7 @@ export default function App() {
     setToken(null);
     setUser(null);
     setMeasurements([]);
+    setShowLanding(true);
   };
 
   const handleAuth = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -293,6 +306,15 @@ export default function App() {
   }
 
   if (!token) {
+    if (showLanding) {
+      return (
+        <DemoTab 
+          isLanding 
+          onGetStarted={() => setShowLanding(false)} 
+        />
+      );
+    }
+
     return (
       <div className="min-h-screen bg-[#F5F5F0] flex items-center justify-center p-6">
         <motion.div 
@@ -370,12 +392,18 @@ export default function App() {
             </button>
           </form>
 
-          <div className="text-center mt-8">
+          <div className="text-center mt-8 space-y-4">
             <button 
               onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
-              className="text-xs font-bold uppercase tracking-widest opacity-50 hover:opacity-100 transition-all"
+              className="text-xs font-bold uppercase tracking-widest opacity-50 hover:opacity-100 transition-all block w-full"
             >
               {authMode === 'login' ? 'Nie masz konta? Zarejestruj się' : 'Masz już konto? Zaloguj się'}
+            </button>
+            <button 
+              onClick={() => setShowLanding(true)}
+              className="text-xs font-bold uppercase tracking-widest opacity-30 hover:opacity-100 transition-all"
+            >
+              Wróć do strony głównej
             </button>
           </div>
         </motion.div>
@@ -510,8 +538,8 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
                 <StatCard 
                   label="Waga" 
-                  value={`${profile.weight} kg`} 
-                  subValue={stats ? `${stats.weightChange30d > 0 ? '+' : ''}${stats.weightChange30d} kg (30 dni)` : 'Brak danych'}
+                  value={formatWeight(profile.weight, unitSystem)} 
+                  subValue={stats ? `${stats.weightChange30d > 0 ? '+' : ''}${unitSystem === 'metric' ? stats.weightChange30d : kgToLbs(stats.weightChange30d)} ${unitSystem === 'metric' ? 'kg' : 'lbs'} (30 dni)` : 'Brak danych'}
                   icon={<Scale className="text-blue-500" />}
                   trend={stats?.weightChange30d}
                 />
@@ -529,7 +557,7 @@ export default function App() {
                 />
                 <StatCard 
                   label="Cel" 
-                  value={profile.targetWeight ? `${profile.targetWeight} kg` : 'Brak'} 
+                  value={profile.targetWeight ? formatWeight(profile.targetWeight, unitSystem) : 'Brak'} 
                   subValue={stats?.targetProgress !== null ? `Postęp: ${stats?.targetProgress}%` : 'Ustaw cel w profilu'}
                   icon={<Target className="text-purple-500" />}
                 />
@@ -545,12 +573,12 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     <div className="p-6 bg-[#F5F5F0] rounded-2xl">
                       <p className="text-[10px] uppercase tracking-widest opacity-50 mb-1">Początek okresu</p>
-                      <p className="text-2xl font-mono font-bold">{stats.firstInMonth.weight} kg</p>
+                      <p className="text-2xl font-mono font-bold">{formatWeight(stats.firstInMonth.weight, unitSystem)}</p>
                       <p className="text-xs opacity-50 mt-1">{format(parseISO(stats.firstInMonth.date), 'PPP', { locale: pl })}</p>
                     </div>
                     <div className="p-6 bg-[#F5F5F0] rounded-2xl">
                       <p className="text-[10px] uppercase tracking-widest opacity-50 mb-1">Obecnie</p>
-                      <p className="text-2xl font-mono font-bold">{stats.latest.weight} kg</p>
+                      <p className="text-2xl font-mono font-bold">{formatWeight(stats.latest.weight, unitSystem)}</p>
                       <p className="text-xs opacity-50 mt-1">Najnowszy pomiar</p>
                     </div>
                     <div className={cn(
@@ -559,7 +587,8 @@ export default function App() {
                     )}>
                       <p className="text-[10px] uppercase tracking-widest opacity-50 mb-1 text-inherit">Zmiana netto</p>
                       <p className="text-2xl font-mono font-bold text-inherit">
-                        {stats.weightChange30d > 0 ? '+' : ''}{stats.weightChange30d} kg
+                        {stats.weightChange30d > 0 ? '+' : ''}
+                        {unitSystem === 'metric' ? stats.weightChange30d : kgToLbs(stats.weightChange30d)} {unitSystem === 'metric' ? 'kg' : 'lbs'}
                       </p>
                       <p className="text-xs opacity-50 mt-1 text-inherit">
                         {stats.weightChange30d <= 0 ? 'Świetna robota!' : 'Trzymaj się planu'}
@@ -578,7 +607,12 @@ export default function App() {
                   <div className="h-[300px] w-full">
                     {measurements.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={[...measurements].reverse()}>
+                        <AreaChart 
+                          data={[...measurements].reverse().map(m => ({
+                            ...m,
+                            weight: unitSystem === 'metric' ? m.weight : kgToLbs(m.weight)
+                          }))}
+                        >
                           <defs>
                             <linearGradient id="colorWeight" x1="0" y1="0" x2="0" y2="1">
                               <stop offset="5%" stopColor="#141414" stopOpacity={0.1}/>
@@ -602,6 +636,7 @@ export default function App() {
                           <Tooltip 
                             contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                             labelFormatter={(str) => format(parseISO(str), 'PPP', { locale: pl })}
+                            formatter={(value: number) => [`${value} ${unitSystem === 'metric' ? 'kg' : 'lbs'}`, 'Waga']}
                           />
                           <Area 
                             type="monotone" 
@@ -731,19 +766,24 @@ export default function App() {
                   <form onSubmit={(e) => {
                     e.preventDefault();
                     const formData = new FormData(e.currentTarget);
-                    const weight = parseFloat(formData.get('weight') as string);
+                    let weight = parseFloat(formData.get('weight') as string);
                     if (weight) {
+                      if (unitSystem === 'imperial') {
+                        weight = lbsToKg(weight);
+                      }
                       addMeasurement(weight);
                       (e.target as HTMLFormElement).reset();
                     }
                   }} className="space-y-4">
                     <div>
-                      <label className="text-[10px] uppercase tracking-widest opacity-50 block mb-2">Aktualna waga (kg)</label>
+                      <label className="text-[10px] uppercase tracking-widest opacity-50 block mb-2">
+                        Aktualna waga ({unitSystem === 'metric' ? 'kg' : 'lbs'})
+                      </label>
                       <input 
                         name="weight"
                         type="number" 
                         step="0.1"
-                        placeholder={profile.weight.toString()}
+                        placeholder={unitSystem === 'metric' ? profile.weight.toString() : kgToLbs(profile.weight).toString()}
                         className="w-full bg-[#F5F5F0] border-none rounded-2xl p-4 text-xl font-mono focus:ring-2 focus:ring-[#141414]"
                         required
                       />
@@ -772,6 +812,28 @@ export default function App() {
               <header className="text-center">
                 <h2 className="text-4xl font-serif italic">Kalkulator</h2>
                 <p className="text-muted-foreground mt-2">Dostosuj swoje parametry, aby uzyskać dokładne wyniki.</p>
+                <div className="flex justify-center mt-6">
+                  <div className="bg-[#F5F5F0] p-1 rounded-xl inline-flex">
+                    <button
+                      onClick={() => setUnitSystem('metric')}
+                      className={cn(
+                        "px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                        unitSystem === 'metric' ? "bg-white shadow-sm text-[#141414]" : "text-[#141414]/50"
+                      )}
+                    >
+                      Metryczne (kg/cm)
+                    </button>
+                    <button
+                      onClick={() => setUnitSystem('imperial')}
+                      className={cn(
+                        "px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                        unitSystem === 'imperial' ? "bg-white shadow-sm text-[#141414]" : "text-[#141414]/50"
+                      )}
+                    >
+                      Imperialne (lbs/ft)
+                    </button>
+                  </div>
+                </div>
               </header>
 
               <div className="bg-white rounded-3xl p-10 shadow-sm border border-[#141414]/5 space-y-8">
@@ -842,34 +904,88 @@ export default function App() {
 
                 <div className="grid grid-cols-2 gap-8">
                   <div>
-                    <label className="text-[10px] uppercase tracking-widest opacity-50 block mb-3">Wzrost (cm)</label>
-                    <input 
-                      type="number" 
-                      value={profile.height}
-                      onChange={async (e) => {
-                        const height = parseInt(e.target.value) || 0;
-                        const newProfile = { ...profile, height };
-                        setProfile(newProfile);
-                        await fetch('/api/profile', {
-                          method: 'PUT',
-                          headers: { 
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${token}`
-                          },
-                          body: JSON.stringify(newProfile)
-                        });
-                      }}
-                      className="w-full bg-[#F5F5F0] border-none rounded-2xl p-4 font-mono"
-                    />
+                    <label className="text-[10px] uppercase tracking-widest opacity-50 block mb-3">
+                      Wzrost ({unitSystem === 'metric' ? 'cm' : 'ft/in'})
+                    </label>
+                    {unitSystem === 'metric' ? (
+                      <input 
+                        type="number" 
+                        value={profile.height}
+                        onChange={async (e) => {
+                          const height = parseInt(e.target.value) || 0;
+                          const newProfile = { ...profile, height };
+                          setProfile(newProfile);
+                          await fetch('/api/profile', {
+                            method: 'PUT',
+                            headers: { 
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify(newProfile)
+                          });
+                        }}
+                        className="w-full bg-[#F5F5F0] border-none rounded-2xl p-4 font-mono"
+                      />
+                    ) : (
+                      <div className="flex gap-2">
+                        <input 
+                          type="number" 
+                          placeholder="ft"
+                          value={cmToFtIn(profile.height).ft}
+                          onChange={async (e) => {
+                            const ft = parseInt(e.target.value) || 0;
+                            const { in: inches } = cmToFtIn(profile.height);
+                            const height = ftInToCm(ft, inches);
+                            const newProfile = { ...profile, height };
+                            setProfile(newProfile);
+                            await fetch('/api/profile', {
+                              method: 'PUT',
+                              headers: { 
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                              },
+                              body: JSON.stringify(newProfile)
+                            });
+                          }}
+                          className="w-full bg-[#F5F5F0] border-none rounded-2xl p-4 font-mono"
+                        />
+                        <input 
+                          type="number" 
+                          placeholder="in"
+                          value={cmToFtIn(profile.height).in}
+                          onChange={async (e) => {
+                            const inches = parseInt(e.target.value) || 0;
+                            const { ft } = cmToFtIn(profile.height);
+                            const height = ftInToCm(ft, inches);
+                            const newProfile = { ...profile, height };
+                            setProfile(newProfile);
+                            await fetch('/api/profile', {
+                              method: 'PUT',
+                              headers: { 
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                              },
+                              body: JSON.stringify(newProfile)
+                            });
+                          }}
+                          className="w-full bg-[#F5F5F0] border-none rounded-2xl p-4 font-mono"
+                        />
+                      </div>
+                    )}
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase tracking-widest opacity-50 block mb-3">Waga (kg)</label>
+                    <label className="text-[10px] uppercase tracking-widest opacity-50 block mb-3">
+                      Waga ({unitSystem === 'metric' ? 'kg' : 'lbs'})
+                    </label>
                     <input 
                       type="number" 
                       step="0.1"
-                      value={profile.weight}
+                      value={unitSystem === 'metric' ? profile.weight : kgToLbs(profile.weight)}
                       onChange={async (e) => {
-                        const weight = parseFloat(e.target.value) || 0;
+                        let weight = parseFloat(e.target.value) || 0;
+                        if (unitSystem === 'imperial') {
+                          weight = lbsToKg(weight);
+                        }
                         const newProfile = { ...profile, weight };
                         setProfile(newProfile);
                         await fetch('/api/profile', {
@@ -912,16 +1028,38 @@ export default function App() {
                 </div>
 
                 <div className="pt-6">
-                  <div className="bg-[#141414] text-white rounded-2xl p-8 flex justify-between items-center">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-widest opacity-50">Twoje TDEE</p>
-                      <p className="text-3xl font-mono">{calculateTDEE(calculateBMR(profile), profile.activityLevel)} kcal</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] uppercase tracking-widest opacity-50">BMI</p>
-                      <p className={cn("text-xl font-mono", getBMICategoryColor(calculateBMI(profile.weight, profile.height)))}>
-                        {calculateBMI(profile.weight, profile.height)}
-                      </p>
+                  <div className="bg-[#141414] text-white rounded-3xl p-10 space-y-8">
+                    <h3 className="text-2xl font-serif italic">Twoje Wyniki</h3>
+                    <div className="grid grid-cols-2 gap-8">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest opacity-50 mb-1">BMR</p>
+                        <p className="text-4xl font-mono font-bold">{calculateBMR(profile)}</p>
+                        <p className="text-xs opacity-50 mt-1">kcal / dzień</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest opacity-50 mb-1">TDEE</p>
+                        <p className="text-4xl font-mono font-bold">{calculateTDEE(calculateBMR(profile), profile.activityLevel)}</p>
+                        <p className="text-xs opacity-50 mt-1">kcal / dzień</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest opacity-50 mb-1">BMI</p>
+                        <p className="text-4xl font-mono font-bold">{calculateBMI(profile.weight, profile.height)}</p>
+                        <p className={cn("text-xs font-bold mt-1", getBMICategoryColor(calculateBMI(profile.weight, profile.height)))}>
+                          {getBMICategory(calculateBMI(profile.weight, profile.height))}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest opacity-50 mb-1">Idealna waga</p>
+                        <p className="text-4xl font-mono font-bold">
+                          {unitSystem === 'metric' 
+                            ? (21.75 * Math.pow(profile.height / 100, 2)).toFixed(1)
+                            : kgToLbs(21.75 * Math.pow(profile.height / 100, 2)).toFixed(1)
+                          }
+                        </p>
+                        <p className="text-xs opacity-50 mt-1">
+                          {unitSystem === 'metric' ? 'kg' : 'lbs'} (szacunkowa)
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1010,7 +1148,7 @@ export default function App() {
                     {filteredHistory.map((m) => (
                       <tr key={m.id} className="border-b border-[#141414]/5 hover:bg-[#F5F5F0]/30 transition-all">
                         <td className="p-6 font-medium">{format(parseISO(m.date), 'PPP', { locale: pl })}</td>
-                        <td className="p-6 font-mono">{m.weight} kg</td>
+                        <td className="p-6 font-mono">{formatWeight(m.weight, unitSystem)}</td>
                         <td className="p-6">
                           <span className={cn("font-mono", getBMICategoryColor(m.bmi))}>{m.bmi}</span>
                           <span className="text-[10px] ml-2 opacity-50">({getBMICategory(m.bmi)})</span>
@@ -1081,9 +1219,14 @@ export default function App() {
                       <input 
                         type="number" 
                         step="0.1"
-                        value={profile.targetWeight || ''}
+                        value={profile.targetWeight 
+                          ? (unitSystem === 'metric' ? profile.targetWeight : kgToLbs(profile.targetWeight)) 
+                          : ''}
                         onChange={async (e) => {
-                          const targetWeight = parseFloat(e.target.value) || 0;
+                          let targetWeight = parseFloat(e.target.value) || 0;
+                          if (unitSystem === 'imperial') {
+                            targetWeight = lbsToKg(targetWeight);
+                          }
                           const newProfile = { ...profile, targetWeight };
                           setProfile(newProfile);
                           await fetch('/api/profile', {
@@ -1095,10 +1238,10 @@ export default function App() {
                             body: JSON.stringify(newProfile)
                           });
                         }}
-                        placeholder="kg"
+                        placeholder={unitSystem === 'metric' ? 'kg' : 'lbs'}
                         className="w-24 bg-[#F5F5F0] border-none rounded-xl p-2 text-sm font-mono text-right"
                       />
-                      <span className="text-xs opacity-50">kg</span>
+                      <span className="text-xs opacity-50">{unitSystem === 'metric' ? 'kg' : 'lbs'}</span>
                     </div>
                   </div>
 

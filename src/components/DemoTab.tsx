@@ -2,7 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronRight, Activity, TrendingUp, Calendar, Target } from 'lucide-react';
 
-export default function DemoTab() {
+interface DemoTabProps {
+  onGetStarted?: () => void;
+  isLanding?: boolean;
+}
+
+export default function DemoTab({ onGetStarted, isLanding = false }: DemoTabProps) {
   const [step, setStep] = useState(0);
 
   useEffect(() => {
@@ -19,7 +24,7 @@ export default function DemoTab() {
   };
 
   return (
-    <div className="w-full h-[calc(100vh-6rem)] bg-black rounded-3xl overflow-hidden relative flex items-center justify-center text-white font-sans">
+    <div className={`w-full bg-black overflow-hidden relative flex items-center justify-center text-white font-sans ${isLanding ? 'h-screen' : 'h-[calc(100vh-6rem)] rounded-3xl'}`}>
       {/* Background Effects */}
       <div className="absolute inset-0 overflow-hidden">
         <motion.div 
@@ -46,6 +51,18 @@ export default function DemoTab() {
           }}
         />
       </div>
+
+      {/* Persistent Get Started Button for Landing Mode */}
+      {isLanding && (
+        <div className="absolute top-8 right-8 z-50">
+          <button 
+            onClick={onGetStarted}
+            className="bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white px-6 py-2 rounded-full text-sm font-bold transition-all"
+          >
+            Zaloguj się
+          </button>
+        </div>
+      )}
 
       <AnimatePresence mode="wait">
         {step === 0 && (
@@ -164,9 +181,10 @@ export default function DemoTab() {
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
+              onClick={onGetStarted}
               className="bg-white text-black px-8 py-4 rounded-full font-bold text-lg flex items-center gap-2 mx-auto hover:bg-blue-50 transition-colors"
             >
-              Rozpocznij teraz <ChevronRight />
+              Get Started <ChevronRight />
             </motion.button>
           </motion.div>
         )}
