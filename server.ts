@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
+import pg from "pg";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
@@ -19,54 +19,61 @@ const PORT = 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "metabolic-secret-key-2026";
 
 // Database setup
-const DB_PATH = process.env.DATABASE_PATH || "metabolic.db";
-
-// Ensure database directory exists
-const dbDir = path.dirname(DB_PATH);
-if (dbDir !== "." && !fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
-
-const db = new Database(DB_PATH);
-db.pragma('foreign_keys = ON');
+const { Pool } = pg;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Required for Neon
+  }
+});
 
 // Initialize tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE,
-    password TEXT,
-    age INTEGER,
-    gender TEXT,
-    height REAL,
-    weight REAL,
-    activity_level TEXT,
-    target_weight REAL
-  );
+const initDb = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE,
+        password TEXT,
+        age INTEGER,
+        gender TEXT,
+        height REAL,
+        weight REAL,
+        activity_level TEXT,
+        target_weight REAL
+      );
+    `);
 
-  CREATE TABLE IF NOT EXISTS measurements (
-    id TEXT PRIMARY KEY,
-    user_id TEXT,
-    date TEXT,
-    weight REAL,
-    bmi REAL,
-    bmr REAL,
-    tdee REAL,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS measurements (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        date TEXT,
+        weight REAL,
+        bmi REAL,
+        bmr REAL,
+        tdee REAL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+    `);
+    
+    // Migration: Add target_weight to users if it doesn't exist
+    // In Postgres, we can use IF NOT EXISTS with ALTER TABLE in newer versions, 
+    // or check information_schema. For simplicity, we'll try to add it and ignore error if exists
+    try {
+      await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS target_weight REAL");
+      console.log("Migration: Checked target_weight column in users table");
+    } catch (e) {
+      // Column likely exists or other error, ignore
+    }
 
-// Migration: Add target_weight to users if it doesn't exist
-try {
-  const tableInfo = db.prepare("PRAGMA table_info(users)").all() as any[];
-  const hasTargetWeight = tableInfo.some(col => col.name === 'target_weight');
-  if (!hasTargetWeight) {
-    db.exec("ALTER TABLE users ADD COLUMN target_weight REAL");
-    console.log("Migration: Added target_weight column to users table");
+    console.log("Database initialized");
+  } catch (err) {
+    console.error("Database initialization error:", err);
   }
-} catch (error) {
-  console.error("Migration error:", error);
-}
+};
+
+initDb();
 
 app.use(express.json());
 
@@ -77,17 +84,22 @@ const authenticateToken = (req: any, res: any, next: any) => {
 
   if (!token) return res.sendStatus(401);
 
-  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
+  jwt.verify(token, JWT_SECRET, async (err: any, user: any) => {
     if (err) return res.sendStatus(403);
     
-    // Verify user still exists in DB
-    const userExists = db.prepare("SELECT id FROM users WHERE id = ?").get(user.id);
-    if (!userExists) {
-      return res.status(401).json({ error: "User no longer exists" });
+    try {
+      // Verify user still exists in DB
+      const result = await pool.query("SELECT id FROM users WHERE id = $1", [user.id]);
+      if (result.rows.length === 0) {
+        return res.status(401).json({ error: "User no longer exists" });
+      }
+      
+      req.user = user;
+      next();
+    } catch (error) {
+      console.error(error);
+      res.sendStatus(500);
     }
-    
-    req.user = user;
-    next();
   });
 };
 
@@ -101,12 +113,11 @@ app.post("/api/auth/register", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = crypto.randomUUID();
     
-    const insert = db.prepare(`
-      INSERT INTO users (id, email, password, age, gender, height, weight, activity_level, target_weight)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    
-    insert.run(userId, email, hashedPassword, age, gender, height, weight, activityLevel, targetWeight || null);
+    await pool.query(
+      `INSERT INTO users (id, email, password, age, gender, height, weight, activity_level, target_weight)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [userId, email, hashedPassword, age, gender, height, weight, activityLevel, targetWeight || null]
+    );
     
     const token = jwt.sign({ id: userId, email }, JWT_SECRET);
     res.json({ token, user: { id: userId, email, age, gender, height, weight, activityLevel, targetWeight } });
@@ -120,81 +131,121 @@ app.post("/api/auth/register", async (req, res) => {
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
-  
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(401).json({ error: "Invalid credentials" });
+  try {
+    const result = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    const user = result.rows[0];
+    
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
+    res.json({ 
+      token, 
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        age: user.age, 
+        gender: user.gender, 
+        height: user.height, 
+        weight: user.weight, 
+        activityLevel: user.activity_level,
+        targetWeight: user.target_weight
+      } 
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
   }
-  
-  const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
-  res.json({ 
-    token, 
-    user: { 
-      id: user.id, 
-      email: user.email, 
-      age: user.age, 
-      gender: user.gender, 
-      height: user.height, 
-      weight: user.weight, 
-      activityLevel: user.activity_level,
-      targetWeight: user.target_weight
-    } 
-  });
 });
 
 // Get Profile
-app.get("/api/profile", authenticateToken, (req: any, res) => {
-  const user = db.prepare("SELECT id, email, age, gender, height, weight, activity_level as activityLevel, target_weight as targetWeight FROM users WHERE id = ?").get(req.user.id);
-  if (!user) {
-    return res.status(404).json({ error: "User not found" });
+app.get("/api/profile", authenticateToken, async (req: any, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, email, age, gender, height, weight, activity_level as \"activityLevel\", target_weight as \"targetWeight\" FROM users WHERE id = $1", 
+      [req.user.id]
+    );
+    const user = result.rows[0];
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json(user);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
   }
-  res.json(user);
 });
 
 // Update Profile
-app.put("/api/profile", authenticateToken, (req: any, res) => {
+app.put("/api/profile", authenticateToken, async (req: any, res) => {
   const { age, gender, height, weight, activityLevel, targetWeight } = req.body;
-  db.prepare(`
-    UPDATE users 
-    SET age = ?, gender = ?, height = ?, weight = ?, activity_level = ?, target_weight = ?
-    WHERE id = ?
-  `).run(age, gender, height, weight, activityLevel, targetWeight || null, req.user.id);
-  res.json({ success: true });
+  try {
+    await pool.query(`
+      UPDATE users 
+      SET age = $1, gender = $2, height = $3, weight = $4, activity_level = $5, target_weight = $6
+      WHERE id = $7
+    `, [age, gender, height, weight, activityLevel, targetWeight || null, req.user.id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // Get Measurements
-app.get("/api/measurements", authenticateToken, (req: any, res) => {
-  const measurements = db.prepare("SELECT * FROM measurements WHERE user_id = ? ORDER BY date DESC").all(req.user.id);
-  res.json(measurements);
+app.get("/api/measurements", authenticateToken, async (req: any, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM measurements WHERE user_id = $1 ORDER BY date DESC", [req.user.id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // Add Measurement
-app.post("/api/measurements", authenticateToken, (req: any, res) => {
+app.post("/api/measurements", authenticateToken, async (req: any, res) => {
   const { weight, bmi, bmr, tdee } = req.body;
   const id = crypto.randomUUID();
   const date = new Date().toISOString();
   
-  db.prepare(`
-    INSERT INTO measurements (id, user_id, date, weight, bmi, bmr, tdee)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, req.user.id, date, weight, bmi, bmr, tdee);
-  
-  // Also update current weight in profile
-  db.prepare("UPDATE users SET weight = ? WHERE id = ?").run(weight, req.user.id);
-  
-  res.json({ id, date, weight, bmi, bmr, tdee });
+  try {
+    await pool.query(`
+      INSERT INTO measurements (id, user_id, date, weight, bmi, bmr, tdee)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [id, req.user.id, date, weight, bmi, bmr, tdee]);
+    
+    // Also update current weight in profile
+    await pool.query("UPDATE users SET weight = $1 WHERE id = $2", [weight, req.user.id]);
+    
+    res.json({ id, date, weight, bmi, bmr, tdee });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // Delete Measurement
-app.delete("/api/measurements/:id", authenticateToken, (req: any, res) => {
-  db.prepare("DELETE FROM measurements WHERE id = ? AND user_id = ?").run(req.params.id, req.user.id);
-  res.json({ success: true });
+app.delete("/api/measurements/:id", authenticateToken, async (req: any, res) => {
+  try {
+    await pool.query("DELETE FROM measurements WHERE id = $1 AND user_id = $2", [req.params.id, req.user.id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // Clear History
-app.delete("/api/measurements", authenticateToken, (req: any, res) => {
-  db.prepare("DELETE FROM measurements WHERE user_id = ?").run(req.user.id);
-  res.json({ success: true });
+app.delete("/api/measurements", authenticateToken, async (req: any, res) => {
+  try {
+    await pool.query("DELETE FROM measurements WHERE user_id = $1", [req.user.id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // --- Vite Middleware ---
